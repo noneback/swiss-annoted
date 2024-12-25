@@ -119,7 +119,7 @@ func (m *Map[K, V]) Get(key K) (value V, ok bool) {
 			ok = false
 			return
 		}
-		g += 1 // linear probing
+		g += 1 // linear probing backward, stop when we meet a empty slot.
 		if g >= uint32(len(m.groups)) {
 			g = 0
 		}
@@ -129,15 +129,16 @@ func (m *Map[K, V]) Get(key K) (value V, ok bool) {
 // Put attempts to insert |key| and |value|
 func (m *Map[K, V]) Put(key K, value V) {
 	if m.resident >= m.limit {
-		m.rehash(m.nextSize())
+		m.rehash(m.nextSize()) // not extensible rehashing
 	}
 	hi, lo := splitHash(m.hash.Hash(key))
-	g := probeStart(hi, len(m.groups))
-	for { // inlined find loop
-		matches := metaMatchH2(&m.ctrl[g], lo)
+	g := probeStart(hi, len(m.groups)) // determine group index
+	for {                              // inlined find loop
+		matches := metaMatchH2(&m.ctrl[g], lo) // handle all slot in group all at once, if ctrl[g] matches with lo, this means this slot has been taken by the same key
 		for matches != 0 {
 			s := nextMatch(&matches)
-			if key == m.groups[g].keys[s] { // update
+			// double check and update the key and value. lo hash bits may collide, so we need double check.
+			if key == m.groups[g].keys[s] {
 				m.groups[g].keys[s] = key
 				m.groups[g].values[s] = value
 				return
@@ -145,8 +146,8 @@ func (m *Map[K, V]) Put(key K, value V) {
 		}
 		// |key| is not in group |g|,
 		// stop probing if we see an empty slot
-		matches = metaMatchEmpty(&m.ctrl[g])
-		if matches != 0 { // insert
+		matches = metaMatchEmpty(&m.ctrl[g]) // find empty slot and insert
+		if matches != 0 {                    // insert
 			s := nextMatch(&matches)
 			m.groups[g].keys[s] = key
 			m.groups[g].values[s] = value
@@ -178,6 +179,10 @@ func (m *Map[K, V]) Delete(key K) (ok bool) {
 				// would already be terminated by the existing empty
 				// slot, and therefore reclaiming slot |s| will not
 				// cause premature termination of probes into |g|.
+				// NOTE:
+				// if g has empty slot, then linear probing must stop when it scanning this slot. So whether it empty or tombstone make no difference.
+				// if g has no empty slot, then must set metadata tombstone, otherwise it will disrupt linear probing, since probing stops when empty slot occurs.
+
 				if metaMatchEmpty(&m.ctrl[g]) != 0 {
 					m.ctrl[g][s] = empty
 					m.resident--
@@ -304,7 +309,7 @@ func (m *Map[K, V]) rehash(n uint32) {
 	m.ctrl = make([]metadata, n)
 	for i := range m.ctrl {
 		m.ctrl[i] = newEmptyMetadata()
-	}
+	} 
 	m.hash = maphash.NewSeed(m.hash)
 	m.limit = n * maxAvgGroupLoad
 	m.resident, m.dead = 0, 0

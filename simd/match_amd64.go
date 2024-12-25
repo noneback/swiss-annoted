@@ -6,4 +6,5 @@ package simd
 
 // MatchMetadata performs a 16-way probe of |metadata| using SSE instructions
 // nb: |metadata| must be an aligned pointer
+// NOTE: each digits in return value represent if (metadata[i] == hash) or not.
 func MatchMetadata(metadata *[16]int8, hash int8) uint16
